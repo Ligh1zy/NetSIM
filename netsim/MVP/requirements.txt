@@ -1,6 +1,0 @@
-# NetSim MVP dependencies (Python 3.12+)
-PyQt6>=6.5          # GUI only - the simulation engine never imports it
-networkx>=3.0       # physical-connectivity graph helpers
-
-# Development / testing
-pytest>=7.0
