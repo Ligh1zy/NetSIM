@@ -1,601 +1,676 @@
-# Python GUI Network Emulator — Design Document
+# NetSim MVP — Network Topology Designer & Simulator
 
-**Status:** Initial design  
-**Target language:** Python  
-**Desktop framework:** PyQt6  
-**Recommended initial scope:** Advanced educational emulator (“scope 2.5”)  
+A working vertical slice of the "NetSim" semester project: a PyQt6 desktop
+application in which you draw a network, configure IPv4 addressing, routing
+and firewall rules, press **Simulate**, and get back a highlighted path plus a
+human-readable explanation of every decision the simulator made.
 
-## Planning documents
+This repository is a **feasibility prototype**, not the finished semester
+deliverable. It exists to answer one question: *can three students build the
+full NetSim in 15 weeks?* See [Feasibility Assessment](#feasibility-assessment)
+at the end.
 
-- [Scope 2.5 Spike](SCOPE_2_5_SPIKE.md) — semester implementation plan for the deterministic educational emulator.
-- [Scope 3 Additions](SCOPE_3_ADDITIONS.md) — advanced simulation and optional real-host expansion roadmap.
+---
 
-## 1. Overview
+![NetSim MVP](docs/screenshot.png)
 
-This project is a desktop network emulator inspired by Cisco Packet Tracer. Users construct a topology visually, configure devices through graphical property panels or a CLI, run network operations, and inspect how frames and packets move through the simulated network.
+## What it does
 
-The first version will use Python objects to emulate devices, interfaces, links, packets, protocols, and time. It will not depend on real Linux networking or Docker. However, its architecture will allow real container-backed hosts and services to be added later without replacing the GUI or simulation core.
+* Desktop GUI (PyQt6) with a `QGraphicsScene` topology canvas.
+* Five device types: **PC, Server, Switch, Router, Firewall**.
+* Place devices, drag them, select them, cable them together, delete them.
+* Configure IPv4 addresses, prefixes and default gateways.
+* Routers and firewalls have **multiple interfaces** and a **static routing
+  table**; connected routes are derived automatically.
+* Ordered, first-match-wins **firewall rules** with a configurable default policy.
+* A **GUI-independent simulation engine** that returns a structured
+  `SimulationResult`.
+* Longest-prefix-match routing, gateway validation, layer-2 delivery through
+  switches, loop detection.
+* Path highlighting on the canvas (green = success, yellow = attempted, red =
+  where it stopped) and an educational log in the console.
+* JSON topology save/load with a documented schema.
+* SQLite simulation history.
+* 103 automated tests that run **without PyQt**.
 
-The project’s defining feature is **observability**: users should be able to pause the network, inspect protocol state, follow individual packets, understand forwarding decisions, and see why traffic succeeds or fails.
+## What it deliberately does NOT do
 
-## 2. Product Goals
+No packets are ever sent. Nothing touches a real network interface, a socket,
+or any hardware. Explicitly out of scope for this MVP:
 
-- Provide a drag-and-drop desktop interface for constructing networks.
-- Model packet traversal rather than treating connectivity as an abstract graph.
-- Teach Ethernet, ARP, IPv4, ICMP, routing, and related protocols through visible behavior.
-- Support both visual configuration and a convincing device CLI.
-- Produce deterministic, repeatable simulations that can be paused and stepped.
-- Keep the emulation model independent of PyQt6 so it can run headlessly and be tested easily.
-- Establish extension points for advanced protocols and optional real Linux/container devices.
+packet animation · real traffic · sockets · real ping/traceroute · packet
+capture · ARP · DHCP · DNS · NAT · VLANs · STP · MAC addresses · TCP/UDP state
+machines · OSPF/BGP/RIP · IPv6 · wireless · bandwidth, latency or loss
+modelling · queues · attack simulation · IDS/IPS · authentication · user
+accounts · collaboration · plugins · cloud sync · installers · pretty icons.
 
-## 3. Non-Goals for the Initial Release
+Two further scope limits worth stating up front:
 
-- Bit-for-bit compatibility with commercial router operating systems.
-- Running arbitrary desktop operating systems or virtual machines.
-- Complete implementations of TCP congestion control, OSPF, STP, or every protocol edge case.
-- Compatibility with arbitrary external networking software.
-- Reproducing all Cisco Packet Tracer features.
-- Making Docker, Linux namespaces, or root privileges prerequisites.
+* Simulation is **one-directional**. We follow a packet from source to
+  destination; we do not simulate the reply. A path that works one way may not
+  work in reverse if return routes are missing.
+* The firewall is **stateless** and is evaluated **once, on ingress**, in the
+  direction of travel.
 
-## 4. Scope Decision
+---
 
-Three possible scopes were considered:
+## Requirements
 
-| Scope | Description | Relative difficulty | Expected scale |
-|---|---|---:|---|
-| 1 — Topology visualizer | Place nodes and links, calculate paths, animate abstract traffic | 3/10 | Weeks |
-| 2 — Educational simulator | Simulated Ethernet, ARP, IPv4, ICMP, switching, and routing | 6/10 | Months |
-| 3 — Full emulator | Real software, highly accurate stacks, services, complex protocols, containers/VMs | 9/10 | Potentially years |
+* **Python 3.12+** (developed and verified on 3.13.5)
+* `PyQt6` — GUI only
+* `networkx` — physical-connectivity graph helpers
+* `pytest` — tests
 
-The recommended target is **scope 2.5**: implement scope 2 using an architecture that can grow toward scope 3. The application should feel like a serious emulator without requiring a complete operating-system network stack.
+## Installation
 
-This includes layered packets, device receive/transmit pipelines, protocol state, an event scheduler, tables, a CLI, and detailed packet inspection. Simplified TCP and application services can be introduced later as controlled simulations.
+### Linux / macOS
 
-## 5. User Experience
-
-### 5.1 Main workspace
-
-The main window contains:
-
-- A device palette for PCs, switches, routers, servers, and networks.
-- A central topology canvas with movable devices and visible links.
-- A properties/inspection panel for the selected object.
-- Simulation controls: run, pause, stop, single-step, speed, and reset.
-- A packet/event log with filtering and expandable details.
-- Per-device CLI consoles.
-
-```text
-┌──────────────────────────────────────────────────────────────┐
-│ File   Edit   Simulation                         ▶ Run  ■ Stop│
-├──────────────┬───────────────────────────────┬───────────────┤
-│ DEVICES      │                               │ Properties    │
-│              │       [ PC1 ]                 │               │
-│ PC           │          │                    │ Name: PC1     │
-│ Switch       │       [ SW1 ]────[ R1 ]       │ IP:           │
-│ Router       │          │                    │ 10.0.0.2/24   │
-│ Server       │       [ PC2 ]                 │ Gateway:      │
-│ Network      │                               │ 10.0.0.1      │
-├──────────────┴───────────────────────────────┴───────────────┤
-│ Simulation / Packet Log                                     │
-│ PC1 → ARP broadcast                                         │
-│ SW1 → flooded frame                                         │
-│ PC2 → ARP reply                                             │
-└──────────────────────────────────────────────────────────────┘
+```bash
+conda create --name netsim python=3.12
+conda activate netsim
+python -m pip install -r requirements.txt
 ```
 
-### 5.2 Core workflow
+Run these commands from the `MVP` directory. If `conda activate` is not
+recognized, initialize Conda for your shell with `conda init`, then restart
+the terminal.
 
-1. The user drags devices onto the canvas.
-2. The user connects compatible interfaces with links.
-3. The user configures IP addresses, masks, gateways, ports, and routes.
-4. The user opens a device CLI or chooses an action such as **Ping**.
-5. The simulator schedules and processes protocol events.
-6. Packet animations and the event log explain each hop and decision.
-7. The user pauses or steps through events and inspects device state.
-8. The topology can be saved to and restored from a JSON project file.
+### Windows (Anaconda Prompt or PowerShell)
 
-## 6. Functional Requirements
-
-### 6.1 Topology editing
-
-- Add, rename, move, select, duplicate, and delete devices.
-- Create and remove point-to-point links between interfaces.
-- Prevent invalid or duplicate connections unless supported by the interface type.
-- Zoom, pan, and fit the topology to the viewport.
-- Show interface names, link state, and optional addressing labels.
-- Support undo and redo for topology/configuration changes.
-
-### 6.2 Initial device types
-
-- **PC:** one or more Ethernet interfaces, ARP cache, IP configuration, default gateway, and basic client commands.
-- **Switch:** Ethernet ports, source-MAC learning, forwarding/filtering, flooding, and MAC-table aging.
-- **Router:** routed interfaces, ARP tables, connected/static routes, longest-prefix matching, forwarding, TTL handling, and ICMP errors.
-- **Server:** PC behavior plus simulated services added incrementally.
-
-### 6.3 Initial protocols
-
-The minimum meaningful release supports:
-
-- Ethernet II frames
-- MAC addressing and broadcasts
-- ARP request, reply, caching, expiration, and unresolved queues
-- IPv4 addressing and subnet decisions
-- ICMP echo request/reply
-- IPv4 TTL decrement and packet drops
-- Switch learning and forwarding
-- Connected and static IPv4 routes
-
-### 6.4 CLI
-
-Each device exposes commands appropriate to its capabilities. Initial examples:
-
-```text
-PC1> ip addr
-eth0 192.168.1.10/24 up
-
-PC1> arp
-192.168.1.1  00:1A:22:40:33:01
-
-PC1> ping 172.16.0.20
-Reply from 172.16.0.20: time=12ms ttl=63
-
-PC1> traceroute 172.16.0.20
-1  192.168.1.1
-2  10.0.0.2
-3  172.16.0.20
+```powershell
+conda create --name netsim python=3.12
+conda activate netsim
+python -m pip install -r requirements.txt
 ```
 
-The CLI must call the same model APIs as the graphical controls. It must not contain a separate implementation of networking behavior.
+If `conda` is not recognized in PowerShell, use Anaconda Prompt or run
+`conda init powershell`, then restart PowerShell.
 
-### 6.5 Inspection and logging
+To leave the environment:
 
-Selecting a device can expose:
-
-- Interfaces and administrative/operational state
-- IP and MAC addresses
-- ARP cache
-- Switch MAC table
-- Routing table
-- Packet counters and drop counters
-- Active protocol timers
-- Recent received, transmitted, and dropped packets
-
-Selecting an event or animated packet should reveal its protocol layers and the reason for each forwarding or drop decision.
-
-## 7. Architecture
-
-The project is divided into five primary layers plus persistence and testing support.
-
-```mermaid
-flowchart TB
-    GUI["PyQt6 GUI"] --> APP["Application controller"]
-    CLI["Device CLI"] --> APP
-    APP --> DEV["Devices and interfaces"]
-    DEV --> PROTO["Protocols and packet models"]
-    DEV --> SIM["Discrete-event engine"]
-    SIM --> TOPO["Topology and links"]
-    STORE["JSON persistence"] --> APP
+```bash
+conda deactivate
 ```
 
-### 7.1 `gui`
+To remove the environment later:
 
-Responsible for presentation and input only:
-
-- `QGraphicsView` and `QGraphicsScene` topology canvas
-- Graphical device and link items
-- Device palette
-- Properties and state inspectors
-- CLI terminal widgets
-- Packet animations and event timeline
-- Menus, dialogs, and simulation controls
-
-GUI objects reference model identifiers or controller APIs. They do not implement ARP, routing, switching, or packet delivery.
-
-### 7.2 `devices`
-
-Contains network behavior and state:
-
-- `Device`
-- `PC`
-- `Switch`
-- `Router`
-- `Server`
-- `Interface`
-- Routing, ARP, and MAC tables
-- Receive/transmit pipelines
-
-Each device owns interfaces, protocol state, and dispatch behavior. A frame must arrive through an interface and leave through an interface; it must never jump directly between graph nodes.
-
-### 7.3 `protocols`
-
-Contains immutable or carefully controlled protocol data models and handlers:
-
-- `EthernetFrame`
-- `ARPPacket`
-- `IPv4Packet`
-- `ICMPMessage`
-- Later: UDP datagrams, TCP segments, DHCP, DNS, and application messages
-
-Protocol objects should support validation, human-readable inspection, and serialization where useful.
-
-### 7.4 `simulation`
-
-Contains the deterministic discrete-event engine:
-
-- Simulation clock
-- Priority event queue
-- Event ordering rules
-- Link transmission and propagation delay
-- Protocol timers
-- Pause, resume, step, speed, and reset
-- Structured event publication for the GUI/log
-
-The simulation must not depend on wall-clock threads for correctness. UI animation time is separate from logical simulation time.
-
-### 7.5 `cli`
-
-Contains parsing, validation, command dispatch, help, and output formatting. Commands act on model/controller APIs and may schedule simulation events.
-
-### 7.6 `persistence`
-
-Projects are stored as versioned JSON containing:
-
-- Project/schema version
-- Devices and stable identifiers
-- Device configuration
-- Interfaces
-- Links and endpoints
-- Canvas positions and display settings
-- Optional simulation settings
-
-Transient state such as packets in flight and timers can be excluded initially. Later versions may support simulation snapshots separately from topology files.
-
-## 8. Core Domain Model
-
-Illustrative interfaces, not final implementation:
-
-```python
-class Device:
-    id: str
-    name: str
-    interfaces: list[Interface]
-
-    def receive_frame(self, interface: Interface, frame: EthernetFrame) -> None: ...
-
-
-class Interface:
-    id: str
-    name: str
-    mac_address: str
-    ip_configuration: object | None
-    admin_up: bool
-    link: Link | None
-
-
-class Link:
-    endpoint_a: Interface
-    endpoint_b: Interface
-    latency_ms: float
-    bandwidth_bps: int
-    operational: bool
-
-
-class EthernetFrame:
-    src_mac: str
-    dst_mac: str
-    ethertype: int
-    payload: object
-
-
-class IPv4Packet:
-    src_ip: str
-    dst_ip: str
-    ttl: int
-    protocol: int
-    payload: object
+```bash
+conda env remove --name netsim
 ```
 
-A router’s receive pipeline conceptually behaves as follows:
+## Running
 
-```python
-def receive_frame(self, interface, frame):
-    if frame.ethertype == ETHERTYPE_ARP:
-        self.handle_arp(interface, frame.payload)
-    elif frame.ethertype == ETHERTYPE_IPV4:
-        packet = frame.payload
-        if packet.dst_ip in self.local_addresses:
-            self.handle_local_packet(interface, packet)
-        else:
-            self.forward_packet(interface, packet)
+Launch the GUI:
+
+```bash
+python main.py
 ```
 
-## 9. Simulation Semantics
+Run the engine with no GUI at all (the six required demonstrations):
 
-### 9.1 Event model
-
-Every meaningful action becomes a timestamped event, for example:
-
-- Command issued
-- Frame queued for transmission
-- Frame delivered to an interface
-- Switch source MAC learned
-- ARP cache entry inserted or expired
-- Route selected
-- TTL decremented
-- Packet delivered locally
-- Packet dropped with a reason
-- Timer expired
-
-Events should have stable ordering when their timestamps match. This guarantees repeatable runs and reliable tests.
-
-### 9.2 Example: same-subnet ping
-
-```mermaid
-sequenceDiagram
-    participant PC1
-    participant SW1
-    participant PC2
-    PC1->>SW1: ARP request (broadcast)
-    Note over SW1: Learn PC1 MAC
-    SW1->>PC2: Flood ARP request
-    PC2->>SW1: ARP reply (unicast)
-    Note over SW1: Learn PC2 MAC
-    SW1->>PC1: Forward ARP reply
-    PC1->>SW1: ICMP echo request
-    SW1->>PC2: Forward using MAC table
-    PC2->>PC1: ICMP echo reply via SW1
+```bash
+python demo_cli.py
 ```
 
-The UI may animate these events, but the model must complete correctly in headless mode with animations disabled.
+Run the test suite:
 
-## 10. Headless Operation
-
-The same emulator should support scripted use without importing PyQt6:
-
-```python
-net = Network()
-
-pc1 = net.add_pc("PC1")
-r1 = net.add_router("R1")
-net.connect(pc1.eth0, r1.eth0)
-
-pc1.eth0.set_ipv4("192.168.1.10/24")
-r1.eth0.set_ipv4("192.168.1.1/24")
-
-result = net.run_command("PC1", "ping 192.168.1.1")
-net.run_until_idle()
+```bash
+python -m pytest
 ```
 
-This is required for unit testing, automated scenarios, grading, and future alternative front ends.
+Drive the GUI headlessly (optional, for when you change the GUI):
 
-## 11. Docker and Real-Host Integration
-
-### 11.1 Initial decision
-
-Docker is **not required** for the initial simulator or advanced simulated emulator. Python object models provide:
-
-- Deterministic time and behavior
-- Full packet and state inspection
-- Pause and single-step controls
-- Easy automated testing
-- Cross-platform execution
-- No privileged networking setup
-
-### 11.2 When containers become useful
-
-Containers become useful only when users need real Linux tools or services, such as:
-
-- Real `ping`, `curl`, `ip`, and `ss` commands
-- Nginx or another real web server
-- Real DNS or DHCP daemons
-- Arbitrary application processes attached to a lab topology
-
-### 11.3 Future hybrid architecture
-
-The device model should support interchangeable backends:
-
-```python
-class DeviceBackend(Protocol):
-    def start(self) -> None: ...
-    def stop(self) -> None: ...
-    def transmit(self, interface_id: str, frame: bytes) -> None: ...
-
-
-class PythonSimBackend:
-    pass
-
-
-class ContainerBackend:
-    pass
+```bash
+python gui_smoke_test.py screenshot.png
 ```
 
-The optional `ContainerBackend` may later manage Docker or Podman containers, Linux network namespaces, virtual Ethernet pairs, and bridges. It must be isolated behind an adapter boundary because it introduces privileges, cleanup concerns, host-platform differences, and nondeterministic real-time behavior.
+On a machine with no display, prefix that with `QT_QPA_PLATFORM=offscreen`
+(Linux) or `$env:QT_QPA_PLATFORM="offscreen"` (PowerShell).
 
-## 12. Proposed Package Structure
+---
 
-```text
-network_emulator/
-├── app.py
-├── gui/
-│   ├── main_window.py
-│   ├── topology_scene.py
-│   ├── graphics_items.py
-│   ├── inspectors.py
-│   └── terminal.py
-├── core/
-│   ├── network.py
-│   ├── addressing.py
-│   └── events.py
-├── devices/
-│   ├── base.py
-│   ├── pc.py
-│   ├── switch.py
-│   ├── router.py
-│   └── server.py
-├── protocols/
-│   ├── ethernet.py
-│   ├── arp.py
-│   ├── ipv4.py
-│   └── icmp.py
-├── simulation/
-│   ├── clock.py
-│   ├── scheduler.py
-│   └── link.py
-├── cli/
-│   ├── parser.py
-│   ├── commands.py
-│   └── formatters.py
-├── persistence/
-│   ├── schema.py
-│   └── project_store.py
-└── tests/
-    ├── unit/
-    ├── scenarios/
-    └── gui/
+## Quick start in the GUI
+
+1. **File → Load demo topology.** You get
+   `PC1 — Switch1 — Router1 — Router2 — Firewall1 — Server1`, fully configured.
+2. At the bottom choose Source `PC1`, Destination `Server1`, Protocol `ICMP`,
+   Dst port `(none)`, then press **Simulate**. The path turns green and the
+   console explains every hop.
+3. Change Protocol to `TCP` and Dst port to `80`. Simulate again: the packet is
+   dropped at `Firewall1`, which turns red, and the log names rule #2.
+4. Change the port to `443`: allowed by rule #1, green again.
+5. Select `Firewall1`, press **Edit firewall rules…**, use **Move up** /
+   **Move down** to put the DENY rule above the ALLOW rule, and re-simulate to
+   see rule order change the outcome.
+
+### Building a topology from scratch
+
+1. Click **PC**, **Switch**, **Router**, … in the left palette. Each click drops
+   a device on the canvas.
+2. Drag devices around in **Select / move** mode.
+3. Press **Connect devices**, click device A, then click device B. NetSim picks
+   the first free interface on each side. Press **Esc** to cancel.
+4. Click a device to configure it in the right-hand panel:
+   * **PC / Server** — name, IPv4 address, prefix, default gateway. Press **Apply**.
+   * **Router / Firewall** — **Edit interfaces…** (name, address, prefix) and
+     **Edit routing table…**.
+   * **Firewall** — additionally **Edit firewall rules…** and the default policy.
+   * **Switch** — name only; a switch has no IP address.
+5. Select a device or a link and press **Delete** (or the **Delete selected**
+   button) to remove it. Deleting a device removes its cables too.
+6. **File → Save as…** writes a JSON file; **File → Open…** reads one back.
+7. **Simulation → Simulation history…** shows what SQLite has recorded.
+
+The **Validate topology** button lists configuration problems without running a
+simulation. The Validation box in the properties panel shows only the problems
+that concern the selected device.
+
+---
+
+## How routing works
+
+Every layer-3 device forwards using a table built from two sources:
+
+1. **Connected routes**, derived automatically from each validly configured
+   interface. A router with `eth0 = 192.168.1.1/24` always knows
+   `192.168.1.0/24`. Metric 0.
+2. **Static routes** you type in: destination network, prefix, next hop,
+   outgoing interface, metric.
+
+Route selection is **longest-prefix match**. Given
+
+```
+10.0.0.0/8      via A
+10.10.0.0/16    via B
+10.10.20.0/24   via C
 ```
 
-## 13. Delivery Roadmap
+a packet for `10.10.20.50` takes the `/24` route. Ties on prefix length are
+broken by metric, then connected-before-static, then table order.
 
-### Phase 0 — Architecture spike
+A route is only usable if its **next hop is on one of the device's own
+subnets** — a next hop is a neighbour, not an arbitrary address. Validation
+says so explicitly, and the simulation fails with a clear message if it is not.
 
-- Build a headless event scheduler.
-- Connect two interfaces with a link.
-- Deliver one Ethernet frame deterministically.
-- Confirm that the core imports no PyQt6 modules.
+An end host compares the destination with its own network:
 
-**Exit criterion:** A unit test sends a frame between two mock devices and verifies ordered events.
+* **Same network** → deliver at layer 2. A switch floods to the rest of the
+  segment; a router or firewall stops the search. If the two hosts are on
+  different subnets, the switch cannot help, and the simulation says so.
+* **Different network** → a **default gateway** is required, and it must be
+  inside the host's own subnet, and it must belong to a router or firewall.
 
-### Phase 1 — Minimum useful network
+Loop protection: the engine remembers every `(device, ingress interface)` state
+it has visited. A repeat is reported as a routing loop, naming the devices. A
+hop limit of 32 is a second safety net.
 
-- PC, interface, link, and switch models
-- Ethernet frames
-- MAC learning, forwarding, and flooding
-- ARP
-- IPv4 and ICMP echo
-- Headless `ping`
+## How firewall rules work
 
-**Exit criterion:** Two PCs connected through a switch discover each other with ARP and complete a ping.
+Rules are an ordered list on the firewall device. Each rule has:
 
-### Phase 2 — Visual editor
+| field | meaning |
+| --- | --- |
+| enabled | disabled rules are skipped (but still reported in the log) |
+| action | `ALLOW` or `DENY` |
+| protocol | `ANY`, `TCP`, `UDP`, `ICMP` |
+| source | address or CIDR, empty = any |
+| destination | address or CIDR, empty = any |
+| dst port | integer 1–65535, empty = any (TCP/UDP only) |
+| comment | free text |
 
-- PyQt6 main window
-- `QGraphicsScene`/`QGraphicsView` canvas
-- Device palette and placement
-- Link creation
-- Selection and properties
-- Save/load JSON
-- Packet/event log
-- Basic packet animation
+Evaluation is **top to bottom, first match wins**. A later `DENY` cannot
+override an earlier `ALLOW` — this is the single most important behaviour to
+demonstrate, because it is what distinguishes a real rule engine from "search
+the list for a deny".
 
-**Exit criterion:** A user constructs and runs the Phase 1 topology entirely through the GUI.
+If **no rule matches**, the device's **default policy** applies. The MVP
+default is **DENY** (deny-by-default whitelist model), which is how perimeter
+firewalls are normally configured. It is configurable per firewall.
 
-### Phase 3 — Routing and CLI
+A malformed rule (bad address, out-of-range port) is **skipped with a warning**
+rather than crashing or silently matching.
 
-- Router forwarding pipeline
-- Connected and static routes
-- Longest-prefix matching
-- TTL expiration and ICMP errors
-- Default gateways
-- Device CLI
-- `traceroute`
+## Error handling
 
-**Exit criterion:** A user configures and tests a multi-router topology through the CLI.
+Three kinds of problem are kept apart deliberately:
 
-### Phase 4 — Emulator depth
+1. **Configuration errors** — the topology is wrong. Reported by
+   `netsim/simulation/validation.py` as errors and warnings with messages
+   written for students, e.g.
 
-- DHCP and DNS
-- UDP
-- Simplified TCP state machine
-- Simulated HTTP service and `curl`
-- VLAN access/trunk ports
-- NAT
-- Link failure and recovery scenarios
+   > PC1 has gateway 192.168.2.1, but PC1 is configured as 192.168.1.10/24. The
+   > gateway is outside the local 192.168.1.0/24 subnet, so PC1 can never send
+   > anything to it.
 
-**Exit criterion:** A client obtains configuration, resolves a server name, and accesses a simulated service across routed networks.
+2. **Simulation failures** — the configuration is legal but this packet cannot
+   get through. Reported in the `SimulationResult` with a machine-readable
+   `FailureReason` (`no_route`, `firewall_blocked`, `routing_loop`, …), a
+   failure message, and the device where it stopped.
 
-### Phase 5 — Advanced protocols
+3. **Programming errors** — bugs. They raise, and the GUI catches them at the
+   button handler, shows a dialog and prints the traceback to the console
+   instead of dying.
 
-- MAC-table and ARP aging controls
-- Spanning Tree or a simplified educational variant
-- RIP and/or an OSPF-like dynamic routing implementation
-- Routing convergence visualization
-- Scenario authoring, expected outcomes, and grading
+Validation covers: invalid addresses and prefixes, network/broadcast addresses
+used as host addresses, duplicate addresses, missing or out-of-subnet
+gateways, gateways pointing at the host itself, unusable routes (bad network,
+host bits set, unreachable next hop, missing target, unknown interface),
+malformed firewall rules, ports on protocols that have none, isolated devices,
+unplugged addressed interfaces, and subnet mismatches across a direct cable.
 
-### Phase 6 — Optional real-host backend
+---
 
-- Container lifecycle adapter
-- Host capability detection
-- Network namespace and virtual-link integration
-- Crash-safe cleanup
-- Explicit security and privilege model
-- Clear UI distinction between simulated and real devices
+## Project structure
 
-This phase should begin only after the pure-Python model and backend interface are stable.
+```
+netsim_mvp/
+    main.py                     GUI launcher
+    demo_cli.py                 headless demonstration of all scenarios
+    gui_smoke_test.py           headless GUI driver + screenshot
+    requirements.txt
+    pytest.ini
+    examples/demo_topology.json exported demo topology
+    docs/screenshot.png         the GUI showing a blocked simulation
 
-## 14. Testing Strategy
+    netsim/
+        domain/                 <- no dependencies on anything above
+            models.py           Device, Interface, Route, FirewallRule, Connection
+            topology.py         Topology container + NetworkX graph helpers
+        simulation/             <- depends only on domain
+            l2.py               layer-2 segment resolution (switch flooding)
+            routing.py          routing table construction + longest prefix match
+            firewall.py         ordered rule evaluation
+            validation.py       configuration validation
+            engine.py           the simulation algorithm
+            result.py           SimulationRequest / SimulationResult / Hop / log
+        persistence/            <- depends only on domain + result
+            json_store.py       schema v1 save/load
+            database.py         SQLite simulation history
+        app/
+            controller.py       integration layer used by BOTH the GUI and the CLI
+        samples/
+            demo.py             sample topologies (data only)
+        gui/                    <- the only package that imports PyQt6
+            main_window.py      layout, menus, simulation controls, console
+            canvas.py           QGraphicsScene/View, modes, highlighting
+            device_items.py     QGraphicsItem subclasses
+            properties_panel.py right-hand configuration panel
+            dialogs.py          interfaces / routes / firewall rule editors
 
-- **Protocol unit tests:** parsing, validation, tables, checksums if modeled, subnet calculations, and routing decisions.
-- **Device pipeline tests:** exact receive/forward/drop behavior for a supplied frame.
-- **Scheduler tests:** ordering, timer cancellation, pause/step, reset, and reproducibility.
-- **Scenario tests:** complete topologies such as switched ping, routed ping, TTL expiry, missing route, ARP timeout, and failed link.
-- **Persistence tests:** JSON round trips and schema migration.
-- **GUI tests:** topology commands and model synchronization; avoid testing network behavior through the GUI when core tests suffice.
-- **Property-based tests:** address/subnet edge cases, routing-table precedence, and randomized event ordering constraints.
-
-Every dropped packet should produce a machine-readable reason that tests can assert and the GUI can explain.
-
-## 15. Key Risks and Mitigations
-
-| Risk | Impact | Mitigation |
-|---|---|---|
-| GUI and protocol logic become coupled | Difficult testing and rewrites | Enforce a PyQt-free core and controller boundary |
-| TCP consumes the project | Long delays before a usable application | Ship Ethernet/ARP/IP/ICMP first; define a deliberately simplified TCP contract |
-| Simulation time depends on threads | Nondeterministic behavior and race conditions | Use a single logical event queue; reserve threads for unrelated blocking I/O |
-| Feature breadth outruns correctness | Many protocols that do not interact reliably | Add protocols through end-to-end scenarios and explicit exit criteria |
-| Project files break as models evolve | Lost or unusable topologies | Version the JSON schema and provide migrations |
-| Container integration becomes foundational | Privilege, portability, and cleanup problems | Keep it as an optional backend implemented only in a late phase |
-| Cisco-like CLI grows without structure | Duplicated behavior and fragile parsing | Separate parsing/formatting from model commands and configuration APIs |
-
-## 16. Architectural Invariants
-
-These rules should be treated as non-negotiable:
-
-1. The network core has no PyQt6 dependency.
-2. A packet traverses interfaces and links; it never teleports between devices.
-3. The GUI and CLI invoke the same application/model operations.
-4. Simulation correctness depends on logical time, not animation or wall-clock timing.
-5. Every forwarding and drop decision can be inspected and explained.
-6. Stable IDs, not display names or canvas coordinates, identify model objects.
-7. Docker/container support is optional and isolated behind a backend interface.
-8. New protocol features include headless tests before GUI presentation work.
-
-## 17. Open Design Questions
-
-- Should the first release support only Ethernet links, or also point-to-point serial-style links?
-- How Cisco-like should the CLI syntax be versus using a simpler emulator-specific CLI?
-- Should project saves preserve only topology/configuration, or optionally capture live simulation state?
-- How realistic should delays, bandwidth limits, queues, and packet loss be in early releases?
-- Should simplified TCP expose its simplifications explicitly in the UI?
-- Is the first distribution target Linux only, or must Windows and macOS work from the beginning?
-- Will the project include guided lessons and grading, or remain a general-purpose lab tool initially?
-
-## 18. Recommended First Milestone
-
-Build a headless vertical slice before creating the full GUI:
-
-```text
-PC1 ── SW1 ── PC2
+    tests/
+        conftest.py             topology builders
+        test_validation.py      subnet membership, gateways, addressing, routes
+        test_routing.py         table construction, longest prefix, egress
+        test_firewall.py        matching, ordering, default policy
+        test_simulation.py      the ten required scenarios end to end
+        test_persistence.py     JSON round trip, SQLite history
+        test_integration.py     full stack + the "no Qt below the GUI" rule
 ```
 
-The milestone is complete when:
+## Architecture overview
 
-- Both PCs have configurable MAC and IPv4 addresses.
-- PC1 determines that PC2 is on the same subnet.
-- PC1 broadcasts an ARP request.
-- The switch learns and floods correctly.
-- PC2 replies and both relevant tables update.
-- ICMP echo request and reply traverse the switch.
-- The simulator produces a deterministic, readable event trace.
-- The entire scenario is covered by automated tests.
+```
+      USER
+        |
+   GUI (PyQt6)            netsim/gui/*
+        |
+   Application layer      netsim/app/controller.py
+        |
+   +----+--------------------+-------------------+
+   |                         |                   |
+Domain model          Simulation engine     Persistence
+netsim/domain/*       netsim/simulation/*   netsim/persistence/*
+```
 
-Once this works, the PyQt6 interface can visualize an already-correct model instead of becoming the place where networking behavior is invented.
+Rules that hold, and are enforced by a test:
+
+* **The simulation engine never imports PyQt.** `test_integration.py` starts a
+  subprocess, imports the engine, the controller and persistence, and fails if
+  any `PyQt*` module ended up in `sys.modules`. A second test greps every
+  module outside `netsim/gui/` for the string `PyQt`.
+* **The topology model is the single source of truth.** A `DeviceItem` on the
+  canvas stores only `device_id`; it reads names and addresses from the domain
+  object and writes back only its x/y position after a drag.
+* **The GUI and the CLI use the same `AppController`.** `demo_cli.py` proves
+  that the whole stack works with no Qt event loop.
+
+### The data model
+
+```
+Topology
+ ├── devices: {id -> Device}
+ │     ├── type: pc | server | switch | router | firewall
+ │     ├── name, x, y
+ │     ├── interfaces: [Interface(id, name, ip, prefix)]
+ │     ├── gateway          (hosts)
+ │     ├── routes: [Route(destination, prefix, next_hop, interface_id, metric)]
+ │     ├── firewall_rules: [FirewallRule(...)]   (firewalls)
+ │     └── default_policy                        (firewalls)
+ └── connections: {id -> Connection(a: Endpoint, b: Endpoint)}
+                                    Endpoint = (device_id, interface_id | None)
+```
+
+A **Network** is not an object: it is derived from an interface address with
+`ipaddress`, so there is no second copy of the truth to keep in sync. IDs are
+short, stable strings (`router-3`, `if-7`, `link-2`) that survive a JSON round
+trip and are what the GUI references.
+
+### The simulation algorithm
+
+1. Resolve source and destination; both must be a PC or a Server.
+2. Validate the topology. Errors on the source or destination stop the run
+   immediately; errors elsewhere become warnings in the log and the simulation
+   proceeds until it hits them naturally.
+3. Check physical connectivity (NetworkX). Not connected → stop early with a
+   clear message.
+4. Source host: is the destination on my subnet?
+   * yes → layer-2 delivery through switches only;
+   * no → require a valid default gateway on the local subnet, then resolve it
+     at layer 2 and hand the packet to that router/firewall.
+5. At each layer-3 device: if it is a firewall, evaluate the rules; then build
+   the routing table, take the longest-prefix match, resolve the egress
+   interface and next hop, and resolve that next hop at layer 2.
+6. Delivery when the layer-2 lookup lands on the destination host with the
+   destination address; failure otherwise.
+7. Loop detection on `(device, ingress interface)`; hop limit 32.
+
+Note what this is *not*: it is **not** a shortest-path search over the graph.
+NetworkX is used only to answer "is there a cable path at all?" A physically
+connected path is never accepted as an IP route.
+
+## JSON schema (version 1)
+
+```json
+{
+  "version": 1,
+  "name": "NetSim demo topology",
+  "devices": [
+    {
+      "id": "pc1",
+      "type": "pc",
+      "name": "PC1",
+      "position": {"x": -360.0, "y": -40.0},
+      "interfaces": [
+        {"id": "pc1-eth0", "name": "eth0", "ip": "192.168.1.10", "prefix": 24}
+      ],
+      "gateway": "192.168.1.1"
+    },
+    {
+      "id": "fw1",
+      "type": "firewall",
+      "name": "Firewall1",
+      "position": {"x": 280.0, "y": -40.0},
+      "interfaces": [
+        {"id": "fw1-eth0", "name": "eth0", "ip": "10.0.2.2", "prefix": 30},
+        {"id": "fw1-eth1", "name": "eth1", "ip": "10.0.3.1", "prefix": 24}
+      ],
+      "routes": [
+        {"destination": "192.168.1.0", "prefix": 24, "next_hop": "10.0.2.1",
+         "interface_id": "fw1-eth0", "metric": 10}
+      ],
+      "default_policy": "deny",
+      "firewall_rules": [
+        {"id": "fw1-rule-1", "action": "allow", "protocol": "tcp",
+         "src": null, "dst": null, "dst_port": 443, "enabled": true,
+         "description": "allow HTTPS to the server LAN"}
+      ]
+    }
+  ],
+  "connections": [
+    {"id": "link-r2-fw1",
+     "a": {"device_id": "r2", "interface_id": "r2-eth1"},
+     "b": {"device_id": "fw1", "interface_id": "fw1-eth0"}}
+  ]
+}
+```
+
+`routes`, `firewall_rules`, `default_policy` and `gateway` are only written for
+the device types that use them. Unknown fields are ignored on load and missing
+optional fields fall back to defaults. A complete example is in
+[`examples/demo_topology.json`](examples/demo_topology.json).
+
+## Demo topology and addressing
+
+```
+PC1 ── Switch1 ── Router1 ── Router2 ── Firewall1 ── Server1
+
+LAN A              192.168.1.0/24   PC1 .10, Router1 eth0 .1
+Router1–Router2    10.0.0.0/30      R1 eth1 .1, R2 eth0 .2
+Router2–Firewall1  10.0.2.0/30      R2 eth1 .1, FW1 eth0 .2
+LAN B              10.0.3.0/24      FW1 eth1 .1, Server1 .10
+```
+
+Router1 carries **both** `10.0.0.0/8` and `10.0.3.0/24` towards Router2, so the
+demo itself exercises longest-prefix matching. Firewall1 ships with
+`#1 ALLOW TCP 443`, `#2 DENY TCP 80`, `#3 ALLOW ICMP` and default policy DENY.
+
+---
+
+## Manual test / demo procedure
+
+Run `python demo_cli.py` for the headless version of all of this. In the GUI:
+
+| # | Steps | Expected |
+| --- | --- | --- |
+| 1 | Load demo, simulate `PC1 → Server1` ICMP | Green path through all six devices; log shows gateway check, two routing lookups and firewall rule #3 matching |
+| 2 | Select PC1, clear the gateway field, Apply, simulate | Fails at PC1 (red). "PC1 has no default gateway configured…" |
+| 3 | Restore gateway `192.168.1.1`, simulate | Succeeds again |
+| 4 | Select Router2, Edit routing table…, delete the `10.0.3.0/24` route, simulate | Fails at Router2. "Router2 has no route to 10.0.3.10. Its routing table only covers: …" |
+| 5 | Reload the demo. Simulate TCP port 80 | Fails at Firewall1 (red), log names rule #2 |
+| 6 | Simulate TCP port 443 | Succeeds, log names rule #1 |
+| 7 | Edit firewall rules: set rule #1 to `ALLOW TCP 80` and rule #2 to `DENY TCP 80`, simulate TCP/80 | Allowed (first match wins) |
+| 8 | Move the DENY rule above the ALLOW rule, simulate TCP/80 | Blocked. Same two rules, different order, different outcome |
+| 9 | Select PC1, set the gateway to `192.168.2.1`, Apply | Validation box explains the gateway is outside 192.168.1.0/24; simulating fails with the same message |
+| 10 | Select Router2, point its `10.0.3.0/24` route back at `10.0.0.1`, delete Router1's `10.0.0.0/8` route, simulate | "Routing loop detected: Router1 → Router2 → Router1 → Router2." |
+| 11 | Save as `my.json`, File → New topology, File → Open `my.json` | Topology returns with positions, addresses, routes and rules intact |
+| 12 | Simulation → Simulation history… | Every run above is listed |
+
+---
+
+## Known limitations
+
+* One-directional simulation; no return path is checked.
+* Stateless firewall, evaluated once on ingress.
+* A PC/Server has exactly one interface. Routers and firewalls may have many.
+* No MAC addresses, no ARP, no switching tables — a switch is a pure flood
+  domain. VLANs would change this and are out of scope.
+* Switches have no IP addresses (a management address is meaningless here).
+* Static routes only; no routing protocols.
+* Only one cable per interface; multi-access segments are built with a switch.
+* Duplicate IP addresses are a validation error, not a simulated conflict.
+* Deleting an interface that still has a cable is refused rather than
+  cascading.
+* The canvas draws plain rectangles with straight lines. No icons, no routing
+  around obstacles, no animation.
+* Undo/redo is not implemented.
+* The properties panel commits on **Apply**, not live as you type.
+* Simulation history has a read-only viewer; there is no search or replay.
+
+---
+
+# Feasibility Assessment
+
+## What this MVP actually proves
+
+Everything below was executed, not estimated:
+
+* `python -m pytest` → **103 passed** (no PyQt imported anywhere in the suite).
+* `python demo_cli.py` → all six required demonstrations plus a routing loop,
+  with 25 rows written to SQLite.
+* `python gui_smoke_test.py` → **27 checks passed**, driving the real
+  `MainWindow`: demo load, selection, drag-updates-model, green highlighting on
+  success, red firewall on a block, add device, connect devices, delete device,
+  validate, save/load round trip, history count, screenshot.
+
+## Risk assessment
+
+| # | Risk | Rating | Why |
+| --- | --- | --- | --- |
+| 1 | PyQt canvas complexity | **LOW** | `QGraphicsScene`/`View` did the work out of the box. `canvas.py` + `device_items.py` are ~330 lines total. Zoom, rubber-band select and z-ordering are one-liners. |
+| 2 | Device drag/drop | **LOW** | `ItemIsMovable` + `ItemSendsGeometryChanges` + `itemChange` is the whole mechanism. Links follow the item in the same callback. |
+| 3 | Device-to-device connections | **LOW–MEDIUM** | Click-A-then-click-B is trivial. The *modelling* question is harder: which interface does a cable land on? Solved by putting `interface_id` in the endpoint and auto-picking the first free interface. Drag-to-connect from a specific port would raise this to MEDIUM. |
+| 4 | Keeping GUI and model in sync | **LOW** | Only because of one rule: graphics items hold an id and nothing else. Every sync bug we would otherwise have had is designed out. Break that rule and this becomes the project's biggest risk. |
+| 5 | Routing engine complexity | **MEDIUM** | `routing.py` is 165 lines and `engine.py` 525, and getting there required thinking, not typing. The subtlety is not the algorithm but the *sequencing*: L2 resolve → L3 decision → L2 resolve. Once that shape was right, the code became short. |
+| 6 | Multi-router forwarding | **LOW** | Falls straight out of the loop in `_forward`. Adding routers costs nothing. |
+| 7 | Longest-prefix matching | **LOW** | `ipaddress` plus one `sort` key. Six tests, including one where a wrong choice provably breaks delivery. |
+| 8 | Firewall rule evaluation | **LOW** | ~145 lines including its rationale docstring. Ordering, disabled rules, default policy and malformed-rule handling are all covered by tests. |
+| 9 | JSON serialisation | **LOW** | Explicit dict-building, no `pickle`, no `__dict__` tricks. Round trip preserves the topology *and* produces an identical simulation log. |
+| 10 | SQLite persistence | **LOW** | One table, `sqlite3` from the standard library, ~140 lines. |
+| 11 | GUI/simulation integration | **LOW** | One method: `controller.run_simulation(...)` returns data, the scene colours itself from it. The result object already carried everything the GUI needed on the first try. |
+| 12 | Testing difficulty | **LOW** | The whole engine is testable with plain dataclasses. 103 tests run in ~5 s. The GUI needed a separate offscreen driver, which took ~150 lines. |
+| 13 | Cross-platform | **LOW–MEDIUM** | Pure Python + Qt; no platform code, no path assumptions beyond `os.path.join`. Verified on Windows 11 / Python 3.13 / Qt 6.10. **Not yet verified on Linux** — that is a real gap and should be a week-1 chore, not an assumption. |
+| 14 | Codebase complexity | **LOW** | ~4 000 lines of implementation (the `netsim` package) + ~1 000 lines of tests. No metaclasses, no plugin system, no inheritance deeper than "subclass a Qt widget". |
+| 15 | Maintainability for 3 students | **MEDIUM** | The code is readable and the layers are clean, but **the layer discipline is the whole design**. It survives only if the team enforces it. The two architectural tests exist precisely so a reviewer does not have to. |
+
+## Risks discovered during implementation
+
+Things that turned out different from the original analysis:
+
+1. **NetworkX contributes far less than expected.** It is used for exactly
+   three things: build a graph, find isolated nodes, answer `has_path`. All the
+   interesting logic — layer-2 flooding, routing, forwarding — had to be written
+   by hand, because a graph library has no concept of a subnet or a gateway.
+   *If you had budgeted "NetworkX handles the pathfinding", correct that now.*
+   The dependency is still worth keeping (isolated-device detection and the
+   early "not physically connected" check are free), but it is a convenience,
+   not a foundation.
+
+2. **The hard part is layer 2, not layer 3.** The single most important design
+   decision in the whole engine is that a layer-2 search floods through
+   switches and *stops* at routers, hosts and firewalls. That one restriction is
+   what makes "a switch does not route between subnets", "the gateway must be
+   on the local segment" and "the next hop must be a neighbour" all fall out
+   naturally. We did not anticipate this; it emerged while writing `l2.py`. Any
+   design that starts from "run a graph search and then check the IPs" will
+   fight this for weeks.
+
+3. **The interface–cable relationship needs deciding early.** "Connect device A
+   to device B" is not enough information for a router with two interfaces. We
+   had to put `interface_id` into the connection endpoint on the first attempt.
+   Retrofitting that after the GUI is written would be painful.
+
+4. **Connected routes must be automatic.** Requiring students to type the
+   directly-connected networks into every routing table would make the tool
+   feel broken. Deriving them from the interfaces (metric 0) is four lines and
+   removes a whole category of confusing failures.
+
+5. **Loop detection needs the ingress interface, not just the device.** Keying
+   the visited set on `device_id` alone reports false loops in legitimate
+   topologies. `(device_id, ingress_interface_id)` is correct.
+
+6. **The offscreen Qt platform renders no text without fonts**, so a headless
+   screenshot shows boxes instead of labels. Harmless, but do not let a CI
+   screenshot fool you into thinking the GUI is broken.
+
+7. **Validation errors and simulation failures overlap awkwardly.** A gateway
+   outside the local subnet is both. We resolved it by letting validation own
+   the message and the engine own the `FailureReason`, but the boundary needs a
+   team decision, not an accident.
+
+Nothing was discovered that undermines the proposed architecture. The
+GUI/engine split in particular was easier to maintain than expected, and paid
+for itself immediately: `demo_cli.py` and the entire test suite exist because
+of it.
+
+## Is the 15-week project feasible for 3 developers?
+
+Yes — with conditions, and with a smaller final scope than the brief implies.
+
+The reasoning: this MVP took roughly the effort of **two to three focused
+person-weeks** including tests and documentation, and it already contains the
+riskiest parts (canvas, forwarding engine, firewall ordering, GUI/model
+synchronisation, both persistence layers). Nothing on the remaining list is
+harder than what is already working; most of it is breadth, polish and
+coursework overhead. Fifteen weeks for three people is roughly 45 person-weeks
+of nominal capacity — but students realistically deliver 8–12 productive
+person-weeks total across a semester once lectures, exams and other courses are
+accounted for. That is still comfortably more than this project needs, provided
+the scope does not inflate.
+
+The failure mode for this project is **not** technical difficulty. It is scope
+creep — deciding in week 9 to add packet animation, VLANs, or a second
+addressing family — and the classic three-person coordination problem of one
+person owning the GUI, one the engine, and nobody owning the boundary between
+them.
+
+## Semester scope projection
+
+### Already proven (do not re-litigate)
+Domain model · layer-2 delivery · routing table + longest-prefix match ·
+multi-router forwarding · firewall ordering and default policy · loop detection ·
+validation with student-readable messages · structured result · canvas editing ·
+path highlighting · JSON schema v1 · SQLite history · the test approach.
+
+### Mandatory for the final deliverable
+1. **Verify on Linux in week 1.** Do not carry this as an assumption.
+2. Interface-aware connections in the GUI (choose the port when it matters).
+3. Undo/redo, or an explicit written decision not to have it.
+4. Simulation history browser: list, filter, click to re-highlight a past run.
+5. A topology library: 6–10 teaching scenarios shipped as JSON.
+6. Better canvas ergonomics: grid snapping, delete confirmation, link labels
+   showing the subnet.
+7. Round-trip simulation (source → destination *and back*), which is where most
+   real misconfigurations show up.
+8. Error-handling pass: every dialog, every file operation, every parse.
+9. Documentation and a user guide written for the students who will be marked
+   on using it.
+10. Keep the test suite growing with the code; do not let it rot in week 10.
+
+### Reasonable stretch goals (only if weeks 1–10 went well)
+* Static ARP-free "MAC-like" switching table display, for teaching only.
+* A step-through mode: advance the simulation one hop at a time.
+* Multiple routes per destination with visible tie-breaking (ECMP display).
+* A rule-hit counter on firewall rules across a session.
+* Export of a simulation report to Markdown or HTML.
+* A second protocol family in the firewall (e.g. port ranges).
+
+### Explicitly reject
+Packet animation · real traffic or sockets · OSPF/BGP/RIP · NAT · VLAN/STP ·
+DHCP/DNS · IPv6 · wireless · bandwidth/latency/loss modelling · TCP state
+machines · IDS/IPS or attack simulation · user accounts · collaboration ·
+plugin architecture · cloud sync · installers.
+
+Each of these is a project in itself and none of them makes the tool better at
+teaching subnetting, routing and firewall policy — which is what it is for.
+
+### Recommended final MVP scope
+
+Everything in this repository, plus the ten mandatory items above, plus a
+teaching-scenario library. That is a complete, reliable, demonstrable
+university project. Anything beyond it is a bonus, not a plan.
+
+### Suggested division of work
+
+* **Developer A — engine & domain**: routing, firewall, validation, round-trip
+  simulation, and the test suite. Owns `netsim/domain` and `netsim/simulation`.
+* **Developer B — GUI**: canvas ergonomics, dialogs, undo/redo, history
+  browser. Owns `netsim/gui`.
+* **Developer C — integration, persistence & content**: controller, JSON/SQLite,
+  scenario library, documentation, cross-platform verification, CI. Owns
+  `netsim/app`, `netsim/persistence`, `examples/`, and the README.
+
+Developer C owning the boundary layer is deliberate: it gives the GUI/engine
+contract a named owner instead of leaving it to whoever touches it last.
+
+## Verdict
+
+**GO WITH CONDITIONS.**
+
+The architecture works, the hard parts are already running, and the remaining
+work is breadth rather than risk. The conditions:
+
+1. **Freeze the scope now.** Adopt the mandatory list above and treat the
+   rejected list as binding. Revisit only in week 10, only if ahead.
+2. **Keep the engine free of Qt.** The two architectural tests in
+   `test_integration.py` must stay green. This is what makes the project
+   testable, and testability is what makes it finishable.
+3. **Verify Linux in week 1**, and keep running the test suite on both
+   platforms.
+4. **No feature without a test.** The engine is only maintainable by three
+   people because its behaviour is pinned down.
+5. **Name an owner for the GUI/engine boundary** (see the split above).
+
+If any of those four conditions slips — particularly (1) and (2) — the honest
+assessment changes. A NetSim with round-trip simulation, ten good teaching
+scenarios and a reliable editor is a strong semester project. A NetSim with
+animated packets, half-finished VLANs and an untested engine is not.
