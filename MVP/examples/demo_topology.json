@@ -1,0 +1,252 @@
+{
+  "version": 1,
+  "name": "NetSim demo topology",
+  "devices": [
+    {
+      "id": "pc1",
+      "type": "pc",
+      "name": "PC1",
+      "position": {
+        "x": -360.0,
+        "y": -40.0
+      },
+      "interfaces": [
+        {
+          "id": "pc1-eth0",
+          "name": "eth0",
+          "ip": "192.168.1.10",
+          "prefix": 24
+        }
+      ],
+      "gateway": "192.168.1.1"
+    },
+    {
+      "id": "sw1",
+      "type": "switch",
+      "name": "Switch1",
+      "position": {
+        "x": -200.0,
+        "y": -40.0
+      },
+      "interfaces": []
+    },
+    {
+      "id": "r1",
+      "type": "router",
+      "name": "Router1",
+      "position": {
+        "x": -40.0,
+        "y": -40.0
+      },
+      "interfaces": [
+        {
+          "id": "r1-eth0",
+          "name": "eth0",
+          "ip": "192.168.1.1",
+          "prefix": 24
+        },
+        {
+          "id": "r1-eth1",
+          "name": "eth1",
+          "ip": "10.0.0.1",
+          "prefix": 30
+        }
+      ],
+      "routes": [
+        {
+          "destination": "10.0.0.0",
+          "prefix": 8,
+          "next_hop": "10.0.0.2",
+          "interface_id": "r1-eth1",
+          "metric": 10
+        },
+        {
+          "destination": "10.0.3.0",
+          "prefix": 24,
+          "next_hop": "10.0.0.2",
+          "interface_id": "r1-eth1",
+          "metric": 10
+        }
+      ]
+    },
+    {
+      "id": "r2",
+      "type": "router",
+      "name": "Router2",
+      "position": {
+        "x": 120.0,
+        "y": -40.0
+      },
+      "interfaces": [
+        {
+          "id": "r2-eth0",
+          "name": "eth0",
+          "ip": "10.0.0.2",
+          "prefix": 30
+        },
+        {
+          "id": "r2-eth1",
+          "name": "eth1",
+          "ip": "10.0.2.1",
+          "prefix": 30
+        }
+      ],
+      "routes": [
+        {
+          "destination": "10.0.3.0",
+          "prefix": 24,
+          "next_hop": "10.0.2.2",
+          "interface_id": "r2-eth1",
+          "metric": 10
+        },
+        {
+          "destination": "192.168.1.0",
+          "prefix": 24,
+          "next_hop": "10.0.0.1",
+          "interface_id": "r2-eth0",
+          "metric": 10
+        }
+      ]
+    },
+    {
+      "id": "fw1",
+      "type": "firewall",
+      "name": "Firewall1",
+      "position": {
+        "x": 280.0,
+        "y": -40.0
+      },
+      "interfaces": [
+        {
+          "id": "fw1-eth0",
+          "name": "eth0",
+          "ip": "10.0.2.2",
+          "prefix": 30
+        },
+        {
+          "id": "fw1-eth1",
+          "name": "eth1",
+          "ip": "10.0.3.1",
+          "prefix": 24
+        }
+      ],
+      "routes": [
+        {
+          "destination": "192.168.1.0",
+          "prefix": 24,
+          "next_hop": "10.0.2.1",
+          "interface_id": "fw1-eth0",
+          "metric": 10
+        }
+      ],
+      "default_policy": "deny",
+      "firewall_rules": [
+        {
+          "id": "fw1-rule-1",
+          "action": "allow",
+          "protocol": "tcp",
+          "src": null,
+          "dst": null,
+          "dst_port": 443,
+          "enabled": true,
+          "description": "allow HTTPS to the server LAN"
+        },
+        {
+          "id": "fw1-rule-2",
+          "action": "deny",
+          "protocol": "tcp",
+          "src": null,
+          "dst": null,
+          "dst_port": 80,
+          "enabled": true,
+          "description": "plain HTTP is not permitted"
+        },
+        {
+          "id": "fw1-rule-3",
+          "action": "allow",
+          "protocol": "icmp",
+          "src": null,
+          "dst": null,
+          "dst_port": null,
+          "enabled": true,
+          "description": "allow ping for troubleshooting"
+        }
+      ]
+    },
+    {
+      "id": "srv1",
+      "type": "server",
+      "name": "Server1",
+      "position": {
+        "x": 440.0,
+        "y": -40.0
+      },
+      "interfaces": [
+        {
+          "id": "srv1-eth0",
+          "name": "eth0",
+          "ip": "10.0.3.10",
+          "prefix": 24
+        }
+      ],
+      "gateway": "10.0.3.1"
+    }
+  ],
+  "connections": [
+    {
+      "id": "link-pc1-sw1",
+      "a": {
+        "device_id": "pc1",
+        "interface_id": "pc1-eth0"
+      },
+      "b": {
+        "device_id": "sw1",
+        "interface_id": null
+      }
+    },
+    {
+      "id": "link-sw1-r1",
+      "a": {
+        "device_id": "sw1",
+        "interface_id": null
+      },
+      "b": {
+        "device_id": "r1",
+        "interface_id": "r1-eth0"
+      }
+    },
+    {
+      "id": "link-r1-r2",
+      "a": {
+        "device_id": "r1",
+        "interface_id": "r1-eth1"
+      },
+      "b": {
+        "device_id": "r2",
+        "interface_id": "r2-eth0"
+      }
+    },
+    {
+      "id": "link-r2-fw1",
+      "a": {
+        "device_id": "r2",
+        "interface_id": "r2-eth1"
+      },
+      "b": {
+        "device_id": "fw1",
+        "interface_id": "fw1-eth0"
+      }
+    },
+    {
+      "id": "link-fw1-srv1",
+      "a": {
+        "device_id": "fw1",
+        "interface_id": "fw1-eth1"
+      },
+      "b": {
+        "device_id": "srv1",
+        "interface_id": "srv1-eth0"
+      }
+    }
+  ]
+}
